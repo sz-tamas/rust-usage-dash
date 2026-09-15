@@ -12,6 +12,7 @@ pub struct ProviderConfig {
     pub plan: String,
     pub monthly_quota: i64,
     pub daily_quota: i64,
+    pub apify_monthly_credit_allowance: f64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +42,7 @@ pub struct NewProvider {
     pub plan: Option<String>,
     pub monthly_quota: Option<i64>,
     pub daily_quota: Option<i64>,
+    pub apify_monthly_credit_allowance: Option<f64>,
 }
 
 #[derive(Deserialize)]
@@ -50,6 +52,7 @@ pub struct UpdateProvider {
     pub plan: Option<String>,
     pub monthly_quota: Option<i64>,
     pub daily_quota: Option<i64>,
+    pub apify_monthly_credit_allowance: Option<f64>,
 }
 
 #[derive(Debug, Clone)]

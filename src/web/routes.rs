@@ -165,11 +165,15 @@ async fn create_provider(
         return Err(AppError::BadRequest);
     }
     let is_resend = input.provider_type == "resend";
+    let is_apify = input.provider_type == "apify";
     if is_resend
         && (input.plan.as_deref().is_none_or(str::is_empty)
             || input.monthly_quota.unwrap_or(0) <= 0
             || input.daily_quota.unwrap_or(0) <= 0)
     {
+        return Err(AppError::BadRequest);
+    }
+    if is_apify && !valid_credit_allowance(input.apify_monthly_credit_allowance) {
         return Err(AppError::BadRequest);
     }
     if !valid_secret_name(input.secret_ref.trim()) {
@@ -209,15 +213,27 @@ async fn update_provider(
         {
             return Err(AppError::BadRequest);
         }
+    } else if provider.provider_type == "apify" {
+        if !valid_credit_allowance(input.apify_monthly_credit_allowance) {
+            return Err(AppError::BadRequest);
+        }
+        input.plan = Some(provider.plan.clone());
+        input.monthly_quota = Some(provider.monthly_quota);
+        input.daily_quota = Some(provider.daily_quota);
     } else {
         input.plan = Some(provider.plan.clone());
         input.monthly_quota = Some(provider.monthly_quota);
         input.daily_quota = Some(provider.daily_quota);
+        input.apify_monthly_credit_allowance = Some(provider.apify_monthly_credit_allowance);
     }
     state
         .database
         .update_provider(&provider.id, &provider.account_id, input)?;
     render_dashboard(&state)
+}
+
+fn valid_credit_allowance(value: Option<f64>) -> bool {
+    value.is_some_and(|amount| amount.is_finite() && amount > 0.0)
 }
 
 async fn delete_confirmation(
@@ -344,6 +360,7 @@ fn render_cards(state: &AppState, account_id: &str) -> Result<String, AppError> 
         .map(|provider| {
             let snapshot = state.database.latest_snapshot(&provider.id)?;
             ProviderCardTemplate {
+                apify_credit: apify_credit_summary(&provider, snapshot.as_ref()),
                 openai_spend_limit: openai_spend_limit_summary(&provider, snapshot.as_ref()),
                 resend_quota: resend_quota_summary(&provider, snapshot.as_ref()),
                 resend_daily_quota: resend_daily_quota_summary(&provider, snapshot.as_ref()),
@@ -355,6 +372,34 @@ fn render_cards(state: &AppState, account_id: &str) -> Result<String, AppError> 
         })
         .collect::<Result<Vec<_>, AppError>>()
         .map(|cards| cards.join("\n"))
+}
+
+fn apify_credit_summary(
+    provider: &ProviderConfig,
+    snapshot: Option<&UsageSnapshot>,
+) -> Option<ApifyCreditSummary> {
+    if provider.provider_type != "apify" {
+        return None;
+    }
+    let snapshot = snapshot?;
+    let allowance = snapshot
+        .metrics
+        .iter()
+        .find(|metric| metric.id == "monthly_credit_allowance")?;
+    let remaining = snapshot
+        .metrics
+        .iter()
+        .find(|metric| metric.id == "monthly_credit_remaining")?;
+    let percent = snapshot
+        .metrics
+        .iter()
+        .find(|metric| metric.id == "monthly_credit_used_percent")?;
+    Some(ApifyCreditSummary {
+        used: format_usd(allowance.used),
+        limit: format_usd(allowance.limit?),
+        remaining: format_signed_usd(remaining.used),
+        percent_used: format!("{:.1}", percent.used),
+    })
 }
 
 fn openai_spend_limit_summary(
@@ -376,6 +421,14 @@ fn openai_spend_limit_summary(
 
 fn format_usd(value: f64) -> String {
     format!("${:.2}", value.max(0.0))
+}
+
+fn format_signed_usd(value: f64) -> String {
+    if value < 0.0 {
+        format!("-${:.2}", value.abs())
+    } else {
+        format_usd(value)
+    }
 }
 
 fn resend_quota_summary(
@@ -551,9 +604,17 @@ struct NewProviderDialogTemplate;
 struct ProviderCardTemplate {
     provider: ProviderConfig,
     snapshot: Option<UsageSnapshot>,
+    apify_credit: Option<ApifyCreditSummary>,
     openai_spend_limit: Option<OpenAiSpendLimitSummary>,
     resend_quota: Option<ResendQuotaSummary>,
     resend_daily_quota: Option<ResendQuotaSummary>,
+}
+
+struct ApifyCreditSummary {
+    used: String,
+    limit: String,
+    remaining: String,
+    percent_used: String,
 }
 
 struct OpenAiSpendLimitSummary {
