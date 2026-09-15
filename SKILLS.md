@@ -39,7 +39,7 @@ Run:
 
 ```bash
 mise run check
-cargo test
+mise run test
 ```
 
 For changes that start the app, use `mise run start` and visit `http://127.0.0.1:5050` (or the configured `USAGE_DASH_PORT`). Direct `cargo run` defaults to port `3000`. Do not bind to public interfaces to simplify testing.

@@ -82,4 +82,4 @@ This is a local tool run by you, for accounts and secrets you are authorized to 
 
 The dashboard protects credentials from its SQLite database, logs, browser responses, and network listeners outside the local machine. It does not protect against a person or malicious process that already controls the machine or the Google account/ADC identity used to run it. Use a dedicated local account where appropriate, keep the machine secure, and grant that identity access only to the specific Secret Manager secrets required.
 
-Before using production credentials, run `mise run check` and review IAM grants and provider-specific response handling.
+Before using production credentials, run `mise run check` and `mise run test`, then review IAM grants and provider-specific response handling.
