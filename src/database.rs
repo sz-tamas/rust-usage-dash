@@ -58,6 +58,11 @@ impl Database {
         connection.execute_batch(include_str!(
             "../migrations/006_clear_obsolete_resend_quota_error.sql"
         ))?;
+        match connection.execute_batch(include_str!("../migrations/007_resend_daily_quota.sql")) {
+            Ok(()) => (),
+            Err(error) if error.to_string().contains("duplicate column name") => (),
+            Err(error) => return Err(error),
+        };
         Self::compact_provider_secret_names(&connection)
     }
 
@@ -86,7 +91,7 @@ impl Database {
 
     pub fn list_providers(&self, account_id: &str) -> Result<Vec<ProviderConfig>, rusqlite::Error> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare("SELECT id, account_id, provider_type, display_name, secret_ref, enabled, last_error, plan, monthly_quota FROM providers WHERE account_id = ?1 ORDER BY created_at DESC")?;
+        let mut statement = connection.prepare("SELECT id, account_id, provider_type, display_name, secret_ref, enabled, last_error, plan, monthly_quota, daily_quota FROM providers WHERE account_id = ?1 ORDER BY created_at DESC")?;
         statement
             .query_map([account_id], |row| {
                 Ok(ProviderConfig {
@@ -99,13 +104,14 @@ impl Database {
                     last_error: row.get(6)?,
                     plan: row.get(7)?,
                     monthly_quota: row.get(8)?,
+                    daily_quota: row.get(9)?,
                 })
             })?
             .collect()
     }
 
     pub fn find_provider(&self, id: &str) -> Result<Option<ProviderConfig>, rusqlite::Error> {
-        self.connection()?.query_row("SELECT id, account_id, provider_type, display_name, secret_ref, enabled, last_error, plan, monthly_quota FROM providers WHERE id = ?1", [id], |row| Ok(ProviderConfig { id: row.get(0)?, account_id: row.get(1)?, provider_type: row.get(2)?, display_name: row.get(3)?, secret_ref: row.get(4)?, enabled: row.get::<_, i64>(5)? != 0, last_error: row.get(6)?, plan: row.get(7)?, monthly_quota: row.get(8)? })).optional()
+        self.connection()?.query_row("SELECT id, account_id, provider_type, display_name, secret_ref, enabled, last_error, plan, monthly_quota, daily_quota FROM providers WHERE id = ?1", [id], |row| Ok(ProviderConfig { id: row.get(0)?, account_id: row.get(1)?, provider_type: row.get(2)?, display_name: row.get(3)?, secret_ref: row.get(4)?, enabled: row.get::<_, i64>(5)? != 0, last_error: row.get(6)?, plan: row.get(7)?, monthly_quota: row.get(8)?, daily_quota: row.get(9)? })).optional()
     }
 
     pub fn add_provider(
@@ -122,7 +128,7 @@ impl Database {
                 .unwrap_or_default()
                 .as_millis()
         );
-        self.connection()?.execute("INSERT INTO providers (id, account_id, provider_type, display_name, secret_ref, plan, monthly_quota, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?8)", params![id, account_id, input.provider_type, input.display_name, input.secret_ref, input.plan, input.monthly_quota, now])?;
+        self.connection()?.execute("INSERT INTO providers (id, account_id, provider_type, display_name, secret_ref, plan, monthly_quota, daily_quota, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 1, ?9, ?9)", params![id, account_id, input.provider_type, input.display_name, input.secret_ref, input.plan.unwrap_or_default(), input.monthly_quota.unwrap_or(0), input.daily_quota.unwrap_or(0), now])?;
         Ok(())
     }
 
@@ -132,7 +138,7 @@ impl Database {
         account_id: &str,
         input: UpdateProvider,
     ) -> Result<(), rusqlite::Error> {
-        self.connection()?.execute("UPDATE providers SET display_name = ?3, secret_ref = ?4, plan = ?5, monthly_quota = ?6, updated_at = ?7 WHERE id = ?1 AND account_id = ?2", params![id, account_id, input.display_name, input.secret_ref, input.plan, input.monthly_quota, now()])?;
+        self.connection()?.execute("UPDATE providers SET display_name = ?3, secret_ref = ?4, plan = ?5, monthly_quota = ?6, daily_quota = ?7, updated_at = ?8 WHERE id = ?1 AND account_id = ?2", params![id, account_id, input.display_name, input.secret_ref, input.plan.unwrap_or_default(), input.monthly_quota.unwrap_or(0), input.daily_quota.unwrap_or(0), now()])?;
         Ok(())
     }
 

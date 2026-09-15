@@ -11,6 +11,7 @@ pub struct ProviderConfig {
     pub last_error: Option<String>,
     pub plan: String,
     pub monthly_quota: i64,
+    pub daily_quota: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -37,16 +38,18 @@ pub struct NewProvider {
     pub provider_type: String,
     pub display_name: String,
     pub secret_ref: String,
-    pub plan: String,
-    pub monthly_quota: i64,
+    pub plan: Option<String>,
+    pub monthly_quota: Option<i64>,
+    pub daily_quota: Option<i64>,
 }
 
 #[derive(Deserialize)]
 pub struct UpdateProvider {
     pub display_name: String,
     pub secret_ref: String,
-    pub plan: String,
-    pub monthly_quota: i64,
+    pub plan: Option<String>,
+    pub monthly_quota: Option<i64>,
+    pub daily_quota: Option<i64>,
 }
 
 #[derive(Debug, Clone)]

@@ -161,12 +161,17 @@ async fn create_provider(
         )
         || input.display_name.trim().is_empty()
         || input.secret_ref.trim().is_empty()
-        || input.plan.trim().is_empty()
-        || input.monthly_quota <= 0
     {
         return Err(AppError::BadRequest);
     }
     let is_resend = input.provider_type == "resend";
+    if is_resend
+        && (input.plan.as_deref().is_none_or(str::is_empty)
+            || input.monthly_quota.unwrap_or(0) <= 0
+            || input.daily_quota.unwrap_or(0) <= 0)
+    {
+        return Err(AppError::BadRequest);
+    }
     if !valid_secret_name(input.secret_ref.trim()) {
         return Err(AppError::BadRequest);
     }
@@ -188,18 +193,26 @@ async fn edit_provider(
 async fn update_provider(
     Path(id): Path<String>,
     State(state): State<Arc<AppState>>,
-    Form(input): Form<UpdateProvider>,
+    Form(mut input): Form<UpdateProvider>,
 ) -> Result<Html<String>, AppError> {
     let provider = provider_for_active_account(&state, &id)?;
-    if input.display_name.trim().is_empty()
-        || input.secret_ref.trim().is_empty()
-        || input.plan.trim().is_empty()
-        || input.monthly_quota <= 0
-    {
+    if input.display_name.trim().is_empty() || input.secret_ref.trim().is_empty() {
         return Err(AppError::BadRequest);
     }
     if !valid_secret_name(input.secret_ref.trim()) {
         return Err(AppError::BadRequest);
+    }
+    if provider.provider_type == "resend" {
+        if input.plan.as_deref().is_none_or(str::is_empty)
+            || input.monthly_quota.unwrap_or(0) <= 0
+            || input.daily_quota.unwrap_or(0) <= 0
+        {
+            return Err(AppError::BadRequest);
+        }
+    } else {
+        input.plan = Some(provider.plan.clone());
+        input.monthly_quota = Some(provider.monthly_quota);
+        input.daily_quota = Some(provider.daily_quota);
     }
     state
         .database
@@ -332,6 +345,7 @@ fn render_cards(state: &AppState, account_id: &str) -> Result<String, AppError> 
             let snapshot = state.database.latest_snapshot(&provider.id)?;
             ProviderCardTemplate {
                 resend_quota: resend_quota_summary(&provider, snapshot.as_ref()),
+                resend_daily_quota: resend_daily_quota_summary(&provider, snapshot.as_ref()),
                 provider,
                 snapshot,
             }
@@ -361,14 +375,39 @@ fn resend_quota_summary(
         .find(|metric| metric.id == "emails_received_current_month")?
         .used;
     let used = sent + received;
-    let limit = provider.monthly_quota as f64;
+    quota_summary(provider.plan.clone(), used, provider.monthly_quota)
+}
+
+fn quota_summary(plan: String, used: f64, quota: i64) -> Option<ResendQuotaSummary> {
+    let limit = quota as f64;
     Some(ResendQuotaSummary {
-        plan: provider.plan.clone(),
+        plan,
         used: format_email_count(used),
         limit: format_email_count(limit),
-        remaining: format_email_count((provider.monthly_quota.saturating_sub(used as i64)) as f64),
+        remaining: format_email_count((quota.saturating_sub(used as i64)) as f64),
         percent_used: format!("{:.1}", used / limit * 100.0),
     })
+}
+
+fn resend_daily_quota_summary(
+    provider: &ProviderConfig,
+    snapshot: Option<&UsageSnapshot>,
+) -> Option<ResendQuotaSummary> {
+    if provider.provider_type != "resend" || provider.daily_quota <= 0 {
+        return None;
+    }
+    let snapshot = snapshot?;
+    let sent = snapshot
+        .metrics
+        .iter()
+        .find(|metric| metric.id == "emails_sent_today")?
+        .used;
+    let received = snapshot
+        .metrics
+        .iter()
+        .find(|metric| metric.id == "emails_received_today")?
+        .used;
+    quota_summary(provider.plan.clone(), sent + received, provider.daily_quota)
 }
 
 fn format_email_count(value: f64) -> String {
@@ -491,6 +530,7 @@ struct ProviderCardTemplate {
     provider: ProviderConfig,
     snapshot: Option<UsageSnapshot>,
     resend_quota: Option<ResendQuotaSummary>,
+    resend_daily_quota: Option<ResendQuotaSummary>,
 }
 
 struct ResendQuotaSummary {
