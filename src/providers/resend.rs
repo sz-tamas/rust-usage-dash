@@ -2,6 +2,7 @@ use super::{Provider, ProviderError};
 use crate::models::{Metric, ProviderConfig, UsageSnapshot};
 use async_trait::async_trait;
 use chrono::{Datelike, Utc};
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 pub struct ResendProvider;
 #[derive(Deserialize)]
@@ -26,7 +27,7 @@ impl Provider for ResendProvider {
     async fn collect(
         &self,
         config: &ProviderConfig,
-        secret: &str,
+        secret: &SecretString,
     ) -> Result<UsageSnapshot, ProviderError> {
         let end = Utc::now().date_naive();
         let start = end.with_day(1).ok_or(ProviderError::InvalidResponse)?;
@@ -121,7 +122,7 @@ impl Provider for ResendProvider {
 }
 async fn fetch(
     client: &reqwest::Client,
-    secret: &str,
+    secret: &SecretString,
     start: String,
     end: String,
     kinds: &str,
@@ -133,7 +134,7 @@ async fn fetch(
             ("end_date", end.clone()),
             ("metrics", kinds.to_owned()),
         ])
-        .bearer_auth(secret)
+        .bearer_auth(secret.expose_secret())
         .header("User-Agent", "rust-usage-dash/0.1")
         .send()
         .await

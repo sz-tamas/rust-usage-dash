@@ -3,6 +3,7 @@ use base64::{
     Engine,
     engine::general_purpose::{URL_SAFE, URL_SAFE_NO_PAD},
 };
+use secrecy::{ExposeSecret, SecretString};
 use serde::Deserialize;
 use tokio::process::Command;
 use zeroize::{Zeroize, Zeroizing};
@@ -47,7 +48,7 @@ pub async fn check_application_default_credentials() -> Result<(), SecretError> 
     application_default_access_token().await.map(|_| ())
 }
 
-async fn application_default_access_token() -> Result<Zeroizing<String>, SecretError> {
+async fn application_default_access_token() -> Result<SecretString, SecretError> {
     let credentials = Command::new("gcloud")
         .args([
             "auth",
@@ -74,12 +75,12 @@ async fn application_default_access_token() -> Result<Zeroizing<String>, SecretE
     if token.is_empty() {
         return Err(SecretError::AuthenticationFailed);
     }
-    Ok(Zeroizing::new(token))
+    Ok(SecretString::from(token))
 }
 
 #[async_trait]
 impl SecretResolver for GcpSecretManagerResolver {
-    async fn resolve(&self, reference: &str) -> Result<Zeroizing<String>, SecretError> {
+    async fn resolve(&self, reference: &str) -> Result<SecretString, SecretError> {
         let parts: Vec<_> = reference.split('/').collect();
         if parts.len() != 6
             || parts[0] != "projects"
@@ -97,7 +98,7 @@ impl SecretResolver for GcpSecretManagerResolver {
             .get(format!(
                 "https://secretmanager.googleapis.com/v1/{reference}:access"
             ))
-            .bearer_auth(token.as_str())
+            .bearer_auth(token.expose_secret())
             .send()
             .await
             .map_err(|_| SecretError::AccessFailed)?;
@@ -126,7 +127,7 @@ impl SecretResolver for GcpSecretManagerResolver {
         let without_newline = value.trim_end_matches(['\r', '\n']).len();
         value.truncate(without_newline);
         // `encoded` and `bytes` are explicitly zeroized when they leave scope.
-        // The returned value is zeroized after the provider request completes.
-        Ok(Zeroizing::new(value))
+        // SecretString zeroizes the returned provider credential when dropped.
+        Ok(SecretString::from(value))
     }
 }

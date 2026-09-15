@@ -26,6 +26,8 @@ The non-negotiable rule is: secret values are never persisted locally, logged, o
 
 Provider adapters belong in `src/providers/`; Google Cloud behavior belongs in `src/secrets/`. Keep the dashboard core independent of provider-specific response formats.
 
+Resolved provider credentials use `secrecy::SecretString`. Pass that type through the resolver and provider interfaces; call `ExposeSecret::expose_secret()` only at the HTTP authorization boundary. Never clone, format, derive/debug-print, serialize, log, persist, or return a secret. Keep decoded intermediate buffers in `zeroize::Zeroizing`.
+
 ## Supported providers
 
 - **OpenAI:** concurrently collect current calendar-month organization costs and spend alerts. Use the largest monthly `threshold_amount` (cents) as the spend limit. Preserve a partial cost snapshot if alert collection fails after costs succeed.

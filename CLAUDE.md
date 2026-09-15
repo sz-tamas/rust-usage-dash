@@ -16,6 +16,8 @@ Build a secure, local-first provider-usage dashboard.
 - Never write credential values to SQLite, files, logs, errors, or browser responses.
 - Store only Secret Manager identifiers (a short name or explicit version reference), never credential values. Normalize the identifier to the active project before resolving it.
 - Keep secrets in memory only during collection.
+- Keep resolved provider credentials in `secrecy::SecretString` and expose them only while constructing the provider authorization header. Use `zeroize::Zeroizing` for decoded intermediate buffers.
+- Never clone, format, serialize, debug-print, log, persist, or return secrets.
 - Never log authorization headers or raw provider responses that may contain sensitive data.
 - Bind the web application only to `127.0.0.1`; read the port from `USAGE_DASH_PORT`.
 - Keep Google IAM permissions limited to the required individual secrets.

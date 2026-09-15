@@ -5,7 +5,7 @@
 Use this when adding a usage source. OpenAI, Apify, and Resend are the currently supported examples; Neon and Upstash are not implemented.
 
 1. Add an adapter in `src/providers/` implementing the shared `Provider` trait.
-2. Receive the resolved credential only as the `secret` argument; never add credential fields to a model, form, database query, or HTTP response.
+2. Receive the resolved credential only as `&secrecy::SecretString`; call `ExposeSecret::expose_secret()` only when constructing the provider authorization header. Never clone, format, serialize, debug-print, log, persist, or return it, and never add credential fields to a model, form, database query, or HTTP response.
 3. Request only the provider's usage or billing endpoint and convert its response into normalized `Metric` values inside a `UsageSnapshot`.
 4. Return concise, credential-free errors. Logs may include the endpoint path, HTTP status, and normalized outcome, but never a request body, response body, key, token, or authorization detail.
 5. If one independent request succeeds and another fails, preserve the sanitized partial result when it remains meaningful to the dashboard; mark the snapshot partial rather than discarding it.

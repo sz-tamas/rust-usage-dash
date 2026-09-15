@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 
 use crate::models::{Metric, ProviderConfig, UsageSnapshot};
@@ -12,11 +13,11 @@ impl Provider for ApifyProvider {
     async fn collect(
         &self,
         config: &ProviderConfig,
-        secret: &str,
+        secret: &SecretString,
     ) -> Result<UsageSnapshot, ProviderError> {
         let response = reqwest::Client::new()
             .get("https://api.apify.com/v2/users/me/usage/monthly")
-            .bearer_auth(secret)
+            .bearer_auth(secret.expose_secret())
             .send()
             .await
             .map_err(|_| ProviderError::Request)?;

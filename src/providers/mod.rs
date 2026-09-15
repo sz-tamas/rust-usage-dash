@@ -3,6 +3,7 @@ mod openai;
 mod resend;
 
 use async_trait::async_trait;
+use secrecy::SecretString;
 
 use crate::models::{ProviderConfig, UsageSnapshot};
 
@@ -33,7 +34,7 @@ pub trait Provider: Send + Sync {
     async fn collect(
         &self,
         config: &ProviderConfig,
-        secret: &str,
+        secret: &SecretString,
     ) -> Result<UsageSnapshot, ProviderError>;
 }
 
@@ -44,7 +45,7 @@ impl ProviderRegistry {
     pub async fn collect(
         &self,
         config: &ProviderConfig,
-        secret: &str,
+        secret: &SecretString,
     ) -> Result<UsageSnapshot, ProviderError> {
         match config.provider_type.as_str() {
             "apify" => ApifyProvider.collect(config, secret).await,

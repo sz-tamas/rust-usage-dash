@@ -1,5 +1,6 @@
 use async_trait::async_trait;
 use chrono::{Datelike, Utc};
+use secrecy::{ExposeSecret, SecretString};
 use serde_json::Value;
 
 use crate::models::{Metric, ProviderConfig, UsageSnapshot};
@@ -13,7 +14,7 @@ impl Provider for OpenAiProvider {
     async fn collect(
         &self,
         config: &ProviderConfig,
-        secret: &str,
+        secret: &SecretString,
     ) -> Result<UsageSnapshot, ProviderError> {
         let now = Utc::now();
         let start = now
@@ -69,7 +70,7 @@ struct Costs {
 
 async fn fetch_costs(
     client: &reqwest::Client,
-    secret: &str,
+    secret: &SecretString,
     start_time: i64,
     end_time: i64,
 ) -> Result<Costs, ProviderError> {
@@ -91,7 +92,10 @@ async fn fetch_costs(
     })
 }
 
-async fn fetch_spend_alerts(client: &reqwest::Client, secret: &str) -> Result<f64, ProviderError> {
+async fn fetch_spend_alerts(
+    client: &reqwest::Client,
+    secret: &SecretString,
+) -> Result<f64, ProviderError> {
     let payload = get_json(
         client,
         secret,
@@ -107,14 +111,14 @@ async fn fetch_spend_alerts(client: &reqwest::Client, secret: &str) -> Result<f6
 
 async fn get_json(
     client: &reqwest::Client,
-    secret: &str,
+    secret: &SecretString,
     url: &str,
     query: &[(&'static str, String)],
 ) -> Result<Value, ProviderError> {
     let response = client
         .get(url)
         .query(query)
-        .bearer_auth(secret)
+        .bearer_auth(secret.expose_secret())
         .header("User-Agent", "rust-usage-dash/0.1")
         .send()
         .await

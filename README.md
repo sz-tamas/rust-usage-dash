@@ -71,7 +71,7 @@ Neon and Upstash may be configured in the UI but do not yet have collectors.
 - The browser receives provider metadata, refresh status, and normalized metrics only. It never receives a provider API key or a Secret Manager payload.
 - Application Default Credentials (ADC) are intentionally stored locally by `gcloud` (normally in `~/.config/gcloud/application_default_credentials.json`). This is the Google authentication needed to read Secret Manager; it is not a provider API key.
 - Every provider refresh obtains a fresh ADC token as needed, reads the configured Secret Manager version, and then makes the provider request. The dashboard does not cache provider API keys: a Secret Manager or provider-access failure fails that refresh rather than falling back to an older credential.
-- The resolved provider key exists only in process memory for the request. Application-owned decoded key buffers use explicit zeroization after the request path completes; no key is written to a file, database, browser response, or log. Network/TLS libraries necessarily hold transient request-header buffers while sending the request.
+- The resolved provider key is held as Rust `secrecy::SecretString` and exposed only at the provider's authorization call. `SecretString` zeroizes its backing value when dropped; decoded intermediate buffers use `zeroize` as well. No key is written to a file, database, browser response, or log. Network/TLS libraries necessarily hold transient request-header buffers while sending the request.
 - Logs contain only safe diagnostic metadata, such as an HTTP status or key-shape flags. They never contain a provider key, authorization header, Secret Manager payload, access token, or provider response body.
 
 ### Authorization and credential disclaimer
