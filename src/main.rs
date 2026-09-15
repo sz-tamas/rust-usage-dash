@@ -24,7 +24,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let state = Arc::new(AppState {
         database,
         secret_resolver: Arc::new(GcpSecretManagerResolver),
-        providers: ProviderRegistry::default(),
+        providers: ProviderRegistry,
     });
 
     let app = Router::new()

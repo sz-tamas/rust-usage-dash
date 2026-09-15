@@ -490,7 +490,7 @@ fn format_email_count(value: f64) -> String {
     let digits = value.to_string();
     let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
     for (index, digit) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             formatted.push(',');
         }
         formatted.push(digit);
@@ -582,6 +582,37 @@ fn valid_secret_name(value: &str) -> bool {
         && value.chars().all(|character| {
             character.is_ascii_alphanumeric() || character == '_' || character == '-'
         })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normalizes_a_short_secret_name_to_the_active_project() {
+        assert_eq!(
+            normalize_secret_reference("usage-project", "OPENAI_ADMIN_KEY").unwrap(),
+            "projects/usage-project/secrets/OPENAI_ADMIN_KEY/versions/latest"
+        );
+    }
+
+    #[test]
+    fn rejects_a_reference_for_another_project() {
+        assert!(
+            normalize_secret_reference(
+                "usage-project",
+                "projects/other-project/secrets/OPENAI_ADMIN_KEY/versions/latest"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn credit_allowance_must_be_positive_and_finite() {
+        assert!(valid_credit_allowance(Some(19.0)));
+        assert!(!valid_credit_allowance(Some(0.0)));
+        assert!(!valid_credit_allowance(Some(f64::NAN)));
+    }
 }
 
 #[derive(Template)]

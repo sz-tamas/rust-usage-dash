@@ -42,31 +42,35 @@ impl Provider for ApifyProvider {
             status: "ok".to_owned(),
             cost: Some(used),
             currency: Some("USD".to_owned()),
-            metrics: vec![
-                Metric {
-                    id: "monthly_credit_allowance".to_owned(),
-                    label: "Monthly credit allowance".to_owned(),
-                    used,
-                    limit: Some(limit),
-                    unit: "USD".to_owned(),
-                },
-                Metric {
-                    id: "monthly_credit_remaining".to_owned(),
-                    label: "Monthly credit remaining".to_owned(),
-                    used: limit - used,
-                    limit: None,
-                    unit: "USD".to_owned(),
-                },
-                Metric {
-                    id: "monthly_credit_used_percent".to_owned(),
-                    label: "Monthly credit used".to_owned(),
-                    used: used / limit * 100.0,
-                    limit: None,
-                    unit: "%".to_owned(),
-                },
-            ],
+            metrics: monthly_credit_metrics(used, limit),
         })
     }
+}
+
+fn monthly_credit_metrics(used: f64, allowance: f64) -> Vec<Metric> {
+    vec![
+        Metric {
+            id: "monthly_credit_allowance".to_owned(),
+            label: "Monthly credit allowance".to_owned(),
+            used,
+            limit: Some(allowance),
+            unit: "USD".to_owned(),
+        },
+        Metric {
+            id: "monthly_credit_remaining".to_owned(),
+            label: "Monthly credit remaining".to_owned(),
+            used: allowance - used,
+            limit: None,
+            unit: "USD".to_owned(),
+        },
+        Metric {
+            id: "monthly_credit_used_percent".to_owned(),
+            label: "Monthly credit used".to_owned(),
+            used: used / allowance * 100.0,
+            limit: None,
+            unit: "%".to_owned(),
+        },
+    ]
 }
 
 fn unix_timestamp() -> String {
@@ -75,4 +79,17 @@ fn unix_timestamp() -> String {
         .unwrap_or_default()
         .as_secs()
         .to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn calculates_credit_allowance_metrics() {
+        let metrics = monthly_credit_metrics(8.92, 49.0);
+        assert_eq!(metrics[0].limit, Some(49.0));
+        assert!((metrics[1].used - 40.08).abs() < f64::EPSILON);
+        assert!((metrics[2].used - 18.204_081_632_653_06).abs() < f64::EPSILON);
+    }
 }

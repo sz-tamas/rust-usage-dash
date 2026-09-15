@@ -4,7 +4,7 @@
 
 This is a local-first Rust dashboard for developer-service usage. It stores provider configuration and sanitized usage history in SQLite. It is not a credential store or a hosted service.
 
-The non-negotiable rule is: secret values are never persisted locally, logged, or returned to the browser. SQLite may contain only a Google Cloud Secret Manager reference such as `projects/<project>/secrets/<secret>/versions/<version>`.
+The non-negotiable rule is: secret values are never persisted locally, logged, or returned to the browser. SQLite may contain only a Secret Manager identifier (a short secret name or a reference such as `projects/<project>/secrets/<secret>/versions/<version>`), never a secret value.
 
 ## Architecture
 
@@ -26,13 +26,23 @@ The non-negotiable rule is: secret values are never persisted locally, logged, o
 
 Provider adapters belong in `src/providers/`; Google Cloud behavior belongs in `src/secrets/`. Keep the dashboard core independent of provider-specific response formats.
 
+## Supported providers
+
+- **OpenAI:** concurrently collect current calendar-month organization costs and spend alerts. Use the largest monthly `threshold_amount` (cents) as the spend limit. Preserve a partial cost snapshot if alert collection fails after costs succeed.
+- **Apify:** use `totalUsageCreditsUsdAfterVolumeDiscount` and the user-configured monthly USD allowance to calculate spend, remaining credit, and percentage used.
+- **Resend:** collect monthly and daily email metrics concurrently and calculate the configured quotas.
+
+For future providers, do not advertise them as supported until their adapter, validation, display, and focused tests exist.
+
 ## Working conventions
 
 - Use `mise run start` for local development and `mise run check` before handing off changes.
+- Run `cargo test` for code changes. The GitHub Actions workflow runs `mise run check`, `cargo test --locked`, `cargo clippy --locked -- -D warnings`, and `cargo audit` on pull requests and pushes to `main`.
 - When templates change, rebuild `static/css/output.css` with `mise run css:build`.
 - Do not commit `data/`, `.tools/`, Tailwind output, environment files, secret material, or private planning documents.
 - Keep new dependencies narrow and justified. Prefer standard library facilities when they fit.
 - Errors shown to users should identify the provider/action, but must never include credentials, authorization headers, Secret Manager output, or full provider response bodies.
+- Safe logs may include provider endpoint paths, HTTP status, and normalized collection state; never log keys, headers, tokens, or response bodies.
 
 ## Current MVP scope
 
