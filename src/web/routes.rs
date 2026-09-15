@@ -32,6 +32,7 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/account/settings", get(account_settings))
         .route("/account", post(update_account))
         .route("/providers", post(create_provider))
+        .route("/providers/list", get(provider_list))
         .route("/providers/refresh", post(refresh_all_providers))
         .route("/providers/new", get(new_provider_form))
         .route("/providers/{id}/edit", get(edit_provider))
@@ -273,6 +274,14 @@ async fn refresh_all_providers(
     ))
 }
 
+async fn provider_list(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
+    let cards_html = match state.database.active_account()? {
+        Some(account) => render_cards(&state, &account.id)?,
+        None => String::new(),
+    };
+    Ok(Html(ProviderListTemplate { cards_html }.render()?))
+}
+
 async fn skip_alerts(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
     let account = state
         .database
@@ -456,6 +465,11 @@ struct NewProviderDialogTemplate;
 struct ProviderCardTemplate {
     provider: ProviderConfig,
     snapshot: Option<UsageSnapshot>,
+}
+#[derive(Template)]
+#[template(path = "partials/provider_list.html")]
+struct ProviderListTemplate {
+    cards_html: String,
 }
 #[derive(Template)]
 #[template(path = "partials/edit_provider.html")]
