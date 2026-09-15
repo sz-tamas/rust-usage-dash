@@ -1,10 +1,12 @@
 mod apify;
+mod resend;
 
 use async_trait::async_trait;
 
 use crate::models::{ProviderConfig, UsageSnapshot};
 
 pub use apify::ApifyProvider;
+pub use resend::ResendProvider;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProviderError {
@@ -36,6 +38,7 @@ impl ProviderRegistry {
     ) -> Result<UsageSnapshot, ProviderError> {
         match config.provider_type.as_str() {
             "apify" => ApifyProvider.collect(config, secret).await,
+            "resend" => ResendProvider.collect(config, secret).await,
             _ => Err(ProviderError::Unsupported),
         }
     }

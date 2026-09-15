@@ -16,6 +16,10 @@ pub trait SecretResolver: Send + Sync {
 pub enum SecretError {
     #[error("secret reference must use projects/<project>/secrets/<secret>/versions/<version>")]
     InvalidReference,
-    #[error("Google Secret Manager could not resolve this secret reference")]
-    ResolutionFailed,
+    #[error("Application Default Credentials could not produce an access token")]
+    AuthenticationFailed,
+    #[error("Google Secret Manager could not access this secret reference")]
+    AccessFailed,
+    #[error("Google Secret Manager returned an invalid secret payload")]
+    InvalidPayload,
 }

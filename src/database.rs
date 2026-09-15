@@ -2,7 +2,9 @@ use std::{fs, path::Path};
 
 use rusqlite::{Connection, OptionalExtension, params};
 
-use crate::models::{Account, NewAccount, NewProvider, Onboarding, ProviderConfig, UsageSnapshot};
+use crate::models::{
+    Account, NewAccount, NewProvider, ProviderConfig, UpdateAccount, UpdateProvider, UsageSnapshot,
+};
 
 #[derive(Clone)]
 pub struct Database {
@@ -24,7 +26,9 @@ impl Database {
     }
 
     fn connection(&self) -> Result<Connection, rusqlite::Error> {
-        Connection::open(&self.path)
+        let connection = Connection::open(&self.path)?;
+        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        Ok(connection)
     }
 
     pub fn migrate(&self) -> Result<(), rusqlite::Error> {
@@ -35,15 +39,46 @@ impl Database {
         match connection.execute_batch(include_str!(
             "../migrations/002_connections_and_onboarding.sql"
         )) {
-            Ok(()) => Ok(()),
-            Err(error) if error.to_string().contains("duplicate column name") => Ok(()),
-            Err(error) => Err(error),
+            Ok(()) => (),
+            Err(error) if error.to_string().contains("duplicate column name") => (),
+            Err(error) => return Err(error),
+        };
+        match connection.execute_batch(include_str!(
+            "../migrations/003_provider_refresh_status.sql"
+        )) {
+            Ok(()) => (),
+            Err(error) if error.to_string().contains("duplicate column name") => (),
+            Err(error) => return Err(error),
+        };
+        Self::compact_provider_secret_names(&connection)
+    }
+
+    fn compact_provider_secret_names(connection: &Connection) -> Result<(), rusqlite::Error> {
+        let mut statement = connection.prepare("SELECT id, secret_ref FROM providers")?;
+        let entries = statement
+            .query_map([], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (id, reference) in entries {
+            let parts: Vec<_> = reference.split('/').collect();
+            if parts.len() >= 4
+                && parts[0] == "projects"
+                && parts[2] == "secrets"
+                && !parts[3].is_empty()
+            {
+                connection.execute(
+                    "UPDATE providers SET secret_ref = ?2 WHERE id = ?1",
+                    params![id, parts[3]],
+                )?;
+            }
         }
+        Ok(())
     }
 
     pub fn list_providers(&self, account_id: &str) -> Result<Vec<ProviderConfig>, rusqlite::Error> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare("SELECT id, account_id, provider_type, display_name, secret_ref, enabled FROM providers WHERE account_id = ?1 ORDER BY created_at DESC")?;
+        let mut statement = connection.prepare("SELECT id, account_id, provider_type, display_name, secret_ref, enabled, last_error FROM providers WHERE account_id = ?1 ORDER BY created_at DESC")?;
         statement
             .query_map([account_id], |row| {
                 Ok(ProviderConfig {
@@ -53,13 +88,14 @@ impl Database {
                     display_name: row.get(3)?,
                     secret_ref: row.get(4)?,
                     enabled: row.get::<_, i64>(5)? != 0,
+                    last_error: row.get(6)?,
                 })
             })?
             .collect()
     }
 
     pub fn find_provider(&self, id: &str) -> Result<Option<ProviderConfig>, rusqlite::Error> {
-        self.connection()?.query_row("SELECT id, account_id, provider_type, display_name, secret_ref, enabled FROM providers WHERE id = ?1", [id], |row| Ok(ProviderConfig { id: row.get(0)?, account_id: row.get(1)?, provider_type: row.get(2)?, display_name: row.get(3)?, secret_ref: row.get(4)?, enabled: row.get::<_, i64>(5)? != 0 })).optional()
+        self.connection()?.query_row("SELECT id, account_id, provider_type, display_name, secret_ref, enabled, last_error FROM providers WHERE id = ?1", [id], |row| Ok(ProviderConfig { id: row.get(0)?, account_id: row.get(1)?, provider_type: row.get(2)?, display_name: row.get(3)?, secret_ref: row.get(4)?, enabled: row.get::<_, i64>(5)? != 0, last_error: row.get(6)? })).optional()
     }
 
     pub fn add_provider(
@@ -77,6 +113,27 @@ impl Database {
                 .as_millis()
         );
         self.connection()?.execute("INSERT INTO providers (id, account_id, provider_type, display_name, secret_ref, enabled, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, ?6)", params![id, account_id, input.provider_type, input.display_name, input.secret_ref, now])?;
+        Ok(())
+    }
+
+    pub fn update_provider(
+        &self,
+        id: &str,
+        account_id: &str,
+        input: UpdateProvider,
+    ) -> Result<(), rusqlite::Error> {
+        self.connection()?.execute("UPDATE providers SET display_name = ?3, secret_ref = ?4, updated_at = ?5 WHERE id = ?1 AND account_id = ?2", params![id, account_id, input.display_name, input.secret_ref, now()])?;
+        Ok(())
+    }
+
+    pub fn delete_provider(&self, id: &str, account_id: &str) -> Result<(), rusqlite::Error> {
+        let removed = self.connection()?.execute(
+            "DELETE FROM providers WHERE id = ?1 AND account_id = ?2",
+            params![id, account_id],
+        )?;
+        if removed == 0 {
+            return Err(rusqlite::Error::QueryReturnedNoRows);
+        }
         Ok(())
     }
 
@@ -104,17 +161,11 @@ impl Database {
             .ok_or(rusqlite::Error::QueryReturnedNoRows)
     }
 
-    pub fn onboarding(&self, account_id: &str) -> Result<Onboarding, rusqlite::Error> {
-        self.connection()?.query_row(
-            "SELECT current_step FROM onboarding WHERE account_id = ?1",
-            [account_id],
-            |row| {
-                Ok(Onboarding {
-                    current_step: row.get(0)?,
-                })
-            },
-        )
+    pub fn update_active_account(&self, input: UpdateAccount) -> Result<(), rusqlite::Error> {
+        self.connection()?.execute("UPDATE accounts SET project_id = ?1, project_name = NULL, updated_at = ?2 WHERE is_active = 1", params![input.project_id, now()])?;
+        Ok(())
     }
+
     pub fn set_auth_status(
         &self,
         account_id: &str,
@@ -140,6 +191,18 @@ impl Database {
     pub fn save_snapshot(&self, snapshot: &UsageSnapshot) -> Result<(), rusqlite::Error> {
         let metrics = serde_json::to_string(&snapshot.metrics).unwrap_or_else(|_| "[]".to_owned());
         self.connection()?.execute("INSERT INTO usage_snapshots (provider_id, timestamp, status, cost, currency, raw_metrics_json) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![snapshot.provider_id, snapshot.timestamp, snapshot.status, snapshot.cost, snapshot.currency, metrics])?;
+        Ok(())
+    }
+
+    pub fn set_provider_refresh_error(
+        &self,
+        id: &str,
+        error: Option<&str>,
+    ) -> Result<(), rusqlite::Error> {
+        self.connection()?.execute(
+            "UPDATE providers SET last_error = ?2, updated_at = ?3 WHERE id = ?1",
+            params![id, error, now()],
+        )?;
         Ok(())
     }
 }

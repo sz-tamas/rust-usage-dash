@@ -35,13 +35,13 @@ Enter a reference in this exact form:
 projects/PROJECT_ID/secrets/SECRET_ID/versions/VERSION
 ```
 
-The current collector implements Apify monthly usage. OpenAI, Neon, Upstash, and Resend can be saved now and have their adapters added without changing the secret or data model.
+The current collectors implement Apify monthly usage and Resend email-quota usage. OpenAI, Neon, and Upstash can be saved now and have their adapters added without changing the secret or data model.
 
 ## Security boundary
 
 - The server binds only to `127.0.0.1`; `USAGE_DASH_PORT` in `mise.toml` selects its port (currently: `3001`).
 - SQLite contains secret *references*, never secret values.
-- The GCP resolver executes `gcloud secrets versions access` using ADC and does not log its output.
+- The GCP resolver obtains an ADC access token and calls the Secret Manager API directly. It never falls back to the separate `gcloud auth login` identity and does not log secret data.
 - Provider requests use the secret only in memory and return sanitized metrics.
 
 Before using production credentials, run `mise run check` and review IAM grants and provider-specific response handling.

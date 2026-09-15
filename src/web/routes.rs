@@ -4,12 +4,15 @@ use askama::Template;
 use axum::{
     Form, Router,
     extract::{Path, State},
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Redirect},
     routing::{get, post},
 };
 
 use crate::{
-    models::{Account, NewAccount, NewProvider, Onboarding, ProviderConfig, UsageSnapshot},
+    models::{
+        Account, NewAccount, NewProvider, ProviderConfig, UpdateAccount, UpdateProvider,
+        UsageSnapshot,
+    },
     secrets::{begin_authentication, check_application_default_credentials},
     web::AppState,
 };
@@ -18,33 +21,38 @@ pub fn router() -> Router<Arc<AppState>> {
     Router::new()
         .route("/", get(index))
         .route("/health", get(|| async { "ok" }))
+        .route(
+            "/authentication/validate",
+            post(validate_saved_authentication),
+        )
         .route("/onboarding/account", post(create_account))
         .route("/onboarding/auth", post(start_auth))
         .route("/onboarding/auth/check", post(check_auth))
-        .route("/onboarding/status", get(onboarding_status))
         .route("/onboarding/alerts/skip", post(skip_alerts))
+        .route("/account/settings", get(account_settings))
+        .route("/account", post(update_account))
         .route("/providers", post(create_provider))
+        .route("/providers/refresh", post(refresh_all_providers))
         .route("/providers/new", get(new_provider_form))
-        .route("/providers/{id}/refresh", post(refresh_provider))
+        .route("/providers/{id}/edit", get(edit_provider))
+        .route("/providers/{id}", post(update_provider))
+        .route("/providers/{id}/delete", post(delete_provider))
+        .route("/providers/{id}/delete/confirm", get(delete_confirmation))
 }
 
 async fn index(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
-    render_dashboard(&state)
+    let validate_authentication = state
+        .database
+        .active_account()?
+        .is_some_and(|account| account.auth_status == "ready");
+    render_dashboard_with_auth_validation(&state, validate_authentication)
 }
 
-async fn onboarding_status(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
-    let account = state.database.active_account()?;
-    let onboarding = account
-        .as_ref()
-        .map(|item| state.database.onboarding(&item.id))
-        .transpose()?;
-    Ok(Html(
-        OnboardingModalTemplate {
-            account,
-            onboarding,
-        }
-        .render()?,
-    ))
+async fn validate_saved_authentication(
+    State(state): State<Arc<AppState>>,
+) -> Result<Html<String>, AppError> {
+    refresh_saved_authentication(&state).await?;
+    render_dashboard(&state)
 }
 
 async fn create_account(
@@ -55,14 +63,26 @@ async fn create_account(
         return Err(AppError::BadRequest);
     }
     let account = state.database.create_account(input)?;
-    let onboarding = state.database.onboarding(&account.id)?;
-    Ok(Html(
-        OnboardingModalTemplate {
-            account: Some(account),
-            onboarding: Some(onboarding),
-        }
-        .render()?,
-    ))
+    Ok(Html(AuthRequiredTemplate { account }.render()?))
+}
+
+async fn account_settings(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
+    let account = state.database.active_account()?.ok_or(AppError::NotFound)?;
+    Ok(Html(AccountSettingsTemplate { account }.render()?))
+}
+
+async fn update_account(
+    State(state): State<Arc<AppState>>,
+    Form(input): Form<UpdateAccount>,
+) -> Result<Html<String>, AppError> {
+    if !valid_project_id(&input.project_id) {
+        return Err(AppError::BadRequest);
+    }
+    let account = state.database.active_account()?.ok_or(AppError::NotFound)?;
+    if account.project_id != input.project_id {
+        state.database.update_active_account(input)?;
+    }
+    render_dashboard(&state)
 }
 
 async fn start_auth(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
@@ -76,7 +96,11 @@ async fn start_auth(State(state): State<Arc<AppState>>) -> Result<Html<String>, 
     tokio::spawn(async move {
         let _ = begin_authentication(&account.project_id).await;
     });
-    onboarding_status(State(state)).await
+    let account = state
+        .database
+        .active_account()?
+        .ok_or(AppError::BadRequest)?;
+    Ok(Html(AuthRequiredTemplate { account }.render()?))
 }
 
 async fn check_auth(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
@@ -92,16 +116,16 @@ async fn check_auth(State(state): State<Arc<AppState>>) -> Result<Html<String>, 
                 Some(&account.project_id),
                 None,
             )?;
-            state.database.set_onboarding_step(&account.id, 2)?;
+            state.database.set_onboarding_step(&account.id, 4)?;
         }
         Err(_) => state.database.set_auth_status(
             &account.id,
-            "authenticating",
+            "failed",
             None,
             Some("Google credentials are not ready yet. Complete sign-in, then check again."),
         )?,
     }
-    onboarding_status(State(state)).await
+    render_dashboard(&state)
 }
 
 async fn new_provider_form(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
@@ -109,7 +133,7 @@ async fn new_provider_form(State(state): State<Arc<AppState>>) -> Result<Html<St
         .database
         .active_account()?
         .ok_or(AppError::BadRequest)?;
-    Ok(Html(NewProviderTemplate.render()?))
+    Ok(Html(NewProviderDialogTemplate.render()?))
 }
 
 async fn create_provider(
@@ -120,6 +144,15 @@ async fn create_provider(
         .database
         .active_account()?
         .ok_or(AppError::BadRequest)?;
+    if check_application_default_credentials().await.is_err() {
+        state.database.set_auth_status(
+            &account.id,
+            "failed",
+            None,
+            Some("Google Application Default Credentials are unavailable. Authenticate with Google to continue."),
+        )?;
+        return render_dashboard(&state);
+    }
     if account.auth_status != "ready"
         || !matches!(
             input.provider_type.as_str(),
@@ -131,11 +164,92 @@ async fn create_provider(
         return Err(AppError::BadRequest);
     }
     let is_resend = input.provider_type == "resend";
+    if !valid_secret_name(input.secret_ref.trim()) {
+        return Err(AppError::BadRequest);
+    }
     state.database.add_provider(&account.id, input)?;
     state
         .database
         .set_onboarding_step(&account.id, if is_resend { 4 } else { 3 })?;
     render_dashboard(&state)
+}
+
+async fn edit_provider(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Html<String>, AppError> {
+    let provider = provider_for_active_account(&state, &id)?;
+    Ok(Html(EditProviderTemplate { provider }.render()?))
+}
+
+async fn update_provider(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Form(input): Form<UpdateProvider>,
+) -> Result<Html<String>, AppError> {
+    let provider = provider_for_active_account(&state, &id)?;
+    if input.display_name.trim().is_empty() || input.secret_ref.trim().is_empty() {
+        return Err(AppError::BadRequest);
+    }
+    if !valid_secret_name(input.secret_ref.trim()) {
+        return Err(AppError::BadRequest);
+    }
+    state
+        .database
+        .update_provider(&provider.id, &provider.account_id, input)?;
+    render_dashboard(&state)
+}
+
+async fn delete_confirmation(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Html<String>, AppError> {
+    let provider = provider_for_active_account(&state, &id)?;
+    Ok(Html(DeleteProviderTemplate { provider }.render()?))
+}
+
+async fn delete_provider(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+) -> Result<Redirect, AppError> {
+    let provider = provider_for_active_account(&state, &id)?;
+    state
+        .database
+        .delete_provider(&provider.id, &provider.account_id)?;
+    Ok(Redirect::to("/"))
+}
+
+async fn refresh_all_providers(
+    State(state): State<Arc<AppState>>,
+) -> Result<Html<String>, AppError> {
+    let account = state
+        .database
+        .active_account()?
+        .ok_or(AppError::BadRequest)?;
+    let mut succeeded = 0;
+    let mut failed = 0;
+    for provider in state.database.list_providers(&account.id)? {
+        let mut provider = provider;
+        match normalize_secret_reference(&account.project_id, &provider.secret_ref) {
+            Ok(reference) => provider.secret_ref = reference,
+            Err(_) => {
+                state.database.set_provider_refresh_error(&provider.id, Some("Secret name or Secret Manager reference is invalid for the active Google project."))?;
+                failed += 1;
+                continue;
+            }
+        }
+        if let Err(error) = refresh_provider_usage(&state, &provider).await {
+            state
+                .database
+                .set_provider_refresh_error(&provider.id, Some(&error))?;
+            failed += 1;
+        } else {
+            succeeded += 1;
+        }
+    }
+    Ok(Html(
+        RefreshCompleteTemplate { succeeded, failed }.render()?,
+    ))
 }
 
 async fn skip_alerts(State(state): State<Arc<AppState>>) -> Result<Html<String>, AppError> {
@@ -147,54 +261,14 @@ async fn skip_alerts(State(state): State<Arc<AppState>>) -> Result<Html<String>,
     render_dashboard(&state)
 }
 
-async fn refresh_provider(
-    Path(id): Path<String>,
-    State(state): State<Arc<AppState>>,
-) -> Result<Html<String>, AppError> {
-    let provider = state
-        .database
-        .find_provider(&id)?
-        .ok_or(AppError::NotFound)?;
-    let account = state.database.active_account()?.ok_or(AppError::NotFound)?;
-    if provider.account_id != account.id {
-        return Err(AppError::NotFound);
-    }
-    let outcome = async {
-        let secret = state
-            .secret_resolver
-            .resolve(&provider.secret_ref)
-            .await
-            .map_err(|_| ())?;
-        let snapshot = state
-            .providers
-            .collect(&provider, &secret)
-            .await
-            .map_err(|_| ())?;
-        state.database.save_snapshot(&snapshot).map_err(|_| ())?;
-        Ok::<_, ()>(snapshot)
-    }
-    .await;
-    let (snapshot, message) = match outcome {
-        Ok(snapshot) => (Some(snapshot), Some("Usage refreshed.".to_owned())),
-        Err(()) => (
-            state.database.latest_snapshot(&provider.id)?,
-            Some(
-                "Refresh failed. Check the GCP reference, ADC login, and provider access."
-                    .to_owned(),
-            ),
-        ),
-    };
-    Ok(Html(
-        ProviderCardTemplate {
-            provider,
-            snapshot,
-            message,
-        }
-        .render()?,
-    ))
+fn render_dashboard(state: &AppState) -> Result<Html<String>, AppError> {
+    render_dashboard_with_auth_validation(state, false)
 }
 
-fn render_dashboard(state: &AppState) -> Result<Html<String>, AppError> {
+fn render_dashboard_with_auth_validation(
+    state: &AppState,
+    validate_authentication: bool,
+) -> Result<Html<String>, AppError> {
     let account = state.database.active_account()?;
     // Loading the project display name here ensures the authenticated project
     // metadata remains part of the dashboard state, ready for the header UI.
@@ -205,18 +279,33 @@ fn render_dashboard(state: &AppState) -> Result<Html<String>, AppError> {
         Some(account) => render_cards(state, &account.id)?,
         None => String::new(),
     };
-    let onboarding = account
-        .as_ref()
-        .map(|item| state.database.onboarding(&item.id))
-        .transpose()?;
     Ok(Html(
         DashboardTemplate {
             account,
-            onboarding,
             cards_html,
+            validate_authentication,
         }
         .render()?,
     ))
+}
+
+/// Setup progress is persisted, but usable ADC is checked each time the dashboard opens.
+async fn refresh_saved_authentication(state: &AppState) -> Result<(), AppError> {
+    let Some(account) = state.database.active_account()? else {
+        return Ok(());
+    };
+    if account.auth_status != "ready" {
+        return Ok(());
+    }
+    if check_application_default_credentials().await.is_err() {
+        state.database.set_auth_status(
+            &account.id,
+            "failed",
+            None,
+            Some("Google Application Default Credentials are unavailable. Authenticate with Google to continue."),
+        )?;
+    }
+    Ok(())
 }
 
 fn render_cards(state: &AppState, account_id: &str) -> Result<String, AppError> {
@@ -228,13 +317,56 @@ fn render_cards(state: &AppState, account_id: &str) -> Result<String, AppError> 
             ProviderCardTemplate {
                 snapshot: state.database.latest_snapshot(&provider.id)?,
                 provider,
-                message: None,
             }
             .render()
             .map_err(AppError::from)
         })
         .collect::<Result<Vec<_>, AppError>>()
         .map(|cards| cards.join("\n"))
+}
+
+fn provider_for_active_account(state: &AppState, id: &str) -> Result<ProviderConfig, AppError> {
+    let provider = state
+        .database
+        .find_provider(id)?
+        .ok_or(AppError::NotFound)?;
+    let account = state.database.active_account()?.ok_or(AppError::NotFound)?;
+    if provider.account_id != account.id {
+        return Err(AppError::NotFound);
+    }
+    Ok(provider)
+}
+
+async fn refresh_provider_usage(
+    state: &AppState,
+    provider: &ProviderConfig,
+) -> Result<UsageSnapshot, String> {
+    let secret = state
+        .secret_resolver
+        .resolve(&provider.secret_ref)
+        .await
+        .map_err(|error| match error {
+            crate::secrets::SecretError::InvalidReference => {
+                "Secret Manager reference is invalid.".to_owned()
+            }
+            crate::secrets::SecretError::AuthenticationFailed => "Google Application Default Credentials are unavailable. Sign in again and check credentials before refreshing.".to_owned(),
+            crate::secrets::SecretError::AccessFailed => "Google Cloud could not access this Secret Manager secret. Check that the ADC identity has Secret Manager Secret Accessor on this secret and that the Secret Manager API is enabled.".to_owned(),
+            crate::secrets::SecretError::InvalidPayload => "Google Cloud returned a Secret Manager value that could not be read safely.".to_owned(),
+        })?;
+    let snapshot = state
+        .providers
+        .collect(provider, &secret)
+        .await
+        .map_err(|error| format!("{} refresh failed: {error}", provider.display_name))?;
+    state
+        .database
+        .save_snapshot(&snapshot)
+        .map_err(|_| "Usage was collected but could not be saved to SQLite.".to_owned())?;
+    state
+        .database
+        .set_provider_refresh_error(&provider.id, None)
+        .map_err(|_| "Usage was collected but refresh status could not be saved.".to_owned())?;
+    Ok(snapshot)
 }
 
 fn valid_project_id(value: &str) -> bool {
@@ -245,28 +377,81 @@ fn valid_project_id(value: &str) -> bool {
         })
 }
 
+fn normalize_secret_reference(project_id: &str, provided: &str) -> Result<String, AppError> {
+    let value = provided.trim();
+    if value.is_empty() {
+        return Err(AppError::BadRequest);
+    }
+    let parts: Vec<_> = value.split('/').collect();
+    match parts.as_slice() {
+        ["projects", project, "secrets", secret]
+            if *project == project_id && valid_secret_name(secret) =>
+        {
+            Ok(format!(
+                "projects/{project}/secrets/{secret}/versions/latest"
+            ))
+        }
+        ["projects", project, "secrets", secret, "versions", version]
+            if *project == project_id && valid_secret_name(secret) && !version.is_empty() =>
+        {
+            Ok(value.to_owned())
+        }
+        [secret] if valid_secret_name(secret) => Ok(format!(
+            "projects/{project_id}/secrets/{secret}/versions/latest"
+        )),
+        _ => Err(AppError::BadRequest),
+    }
+}
+
+fn valid_secret_name(value: &str) -> bool {
+    !value.is_empty()
+        && value.len() <= 255
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || character == '_' || character == '-'
+        })
+}
+
 #[derive(Template)]
 #[template(path = "pages/index.html")]
 struct DashboardTemplate {
     account: Option<Account>,
-    onboarding: Option<Onboarding>,
     cards_html: String,
+    validate_authentication: bool,
 }
 #[derive(Template)]
-#[template(path = "partials/onboarding_modal.html")]
-struct OnboardingModalTemplate {
-    account: Option<Account>,
-    onboarding: Option<Onboarding>,
+#[template(path = "partials/auth_required.html")]
+struct AuthRequiredTemplate {
+    account: Account,
 }
 #[derive(Template)]
-#[template(path = "partials/new_provider.html")]
-struct NewProviderTemplate;
+#[template(path = "partials/new_provider_dialog.html")]
+struct NewProviderDialogTemplate;
 #[derive(Template)]
 #[template(path = "partials/provider_card.html")]
 struct ProviderCardTemplate {
     provider: ProviderConfig,
     snapshot: Option<UsageSnapshot>,
-    message: Option<String>,
+}
+#[derive(Template)]
+#[template(path = "partials/edit_provider.html")]
+struct EditProviderTemplate {
+    provider: ProviderConfig,
+}
+#[derive(Template)]
+#[template(path = "partials/delete_provider.html")]
+struct DeleteProviderTemplate {
+    provider: ProviderConfig,
+}
+#[derive(Template)]
+#[template(path = "partials/account_settings.html")]
+struct AccountSettingsTemplate {
+    account: Account,
+}
+#[derive(Template)]
+#[template(path = "partials/refresh_complete.html")]
+struct RefreshCompleteTemplate {
+    succeeded: usize,
+    failed: usize,
 }
 
 #[derive(Debug, thiserror::Error)]

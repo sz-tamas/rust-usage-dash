@@ -8,6 +8,7 @@ pub struct ProviderConfig {
     pub display_name: String,
     pub secret_ref: String,
     pub enabled: bool,
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,6 +37,12 @@ pub struct NewProvider {
     pub secret_ref: String,
 }
 
+#[derive(Deserialize)]
+pub struct UpdateProvider {
+    pub display_name: String,
+    pub secret_ref: String,
+}
+
 #[derive(Debug, Clone)]
 pub struct Account {
     pub id: String,
@@ -45,12 +52,12 @@ pub struct Account {
     pub auth_error: Option<String>,
 }
 
-#[derive(Debug, Clone)]
-pub struct Onboarding {
-    pub current_step: i64,
+#[derive(Deserialize)]
+pub struct NewAccount {
+    pub project_id: String,
 }
 
 #[derive(Deserialize)]
-pub struct NewAccount {
+pub struct UpdateAccount {
     pub project_id: String,
 }
