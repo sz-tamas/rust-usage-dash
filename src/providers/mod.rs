@@ -14,6 +14,10 @@ pub enum ProviderError {
     Unsupported,
     #[error("provider request failed")]
     Request,
+    #[error(
+        "Your Resend API key has Sending access only. Please create a Full access API key to retrieve usage statistics."
+    )]
+    ResendSendingAccessOnly,
     #[error("provider returned an invalid usage response")]
     InvalidResponse,
 }
