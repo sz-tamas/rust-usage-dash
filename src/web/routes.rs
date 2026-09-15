@@ -344,6 +344,7 @@ fn render_cards(state: &AppState, account_id: &str) -> Result<String, AppError> 
         .map(|provider| {
             let snapshot = state.database.latest_snapshot(&provider.id)?;
             ProviderCardTemplate {
+                openai_spend_limit: openai_spend_limit_summary(&provider, snapshot.as_ref()),
                 resend_quota: resend_quota_summary(&provider, snapshot.as_ref()),
                 resend_daily_quota: resend_daily_quota_summary(&provider, snapshot.as_ref()),
                 provider,
@@ -354,6 +355,27 @@ fn render_cards(state: &AppState, account_id: &str) -> Result<String, AppError> 
         })
         .collect::<Result<Vec<_>, AppError>>()
         .map(|cards| cards.join("\n"))
+}
+
+fn openai_spend_limit_summary(
+    provider: &ProviderConfig,
+    snapshot: Option<&UsageSnapshot>,
+) -> Option<OpenAiSpendLimitSummary> {
+    if provider.provider_type != "openai" {
+        return None;
+    }
+    let metric = snapshot?
+        .metrics
+        .iter()
+        .find(|metric| metric.id == "organization_spend_limit")?;
+    Some(OpenAiSpendLimitSummary {
+        used: format_usd(metric.used),
+        limit: metric.limit.map(format_usd),
+    })
+}
+
+fn format_usd(value: f64) -> String {
+    format!("${:.2}", value.max(0.0))
 }
 
 fn resend_quota_summary(
@@ -529,8 +551,14 @@ struct NewProviderDialogTemplate;
 struct ProviderCardTemplate {
     provider: ProviderConfig,
     snapshot: Option<UsageSnapshot>,
+    openai_spend_limit: Option<OpenAiSpendLimitSummary>,
     resend_quota: Option<ResendQuotaSummary>,
     resend_daily_quota: Option<ResendQuotaSummary>,
+}
+
+struct OpenAiSpendLimitSummary {
+    used: String,
+    limit: Option<String>,
 }
 
 struct ResendQuotaSummary {
