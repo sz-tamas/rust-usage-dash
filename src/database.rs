@@ -50,6 +50,11 @@ impl Database {
             Err(error) if error.to_string().contains("duplicate column name") => (),
             Err(error) => return Err(error),
         };
+        match connection.execute_batch(include_str!("../migrations/004_resend_interval.sql")) {
+            Ok(()) => (),
+            Err(error) if error.to_string().contains("duplicate column name") => (),
+            Err(error) => return Err(error),
+        };
         Self::compact_provider_secret_names(&connection)
     }
 
@@ -78,7 +83,7 @@ impl Database {
 
     pub fn list_providers(&self, account_id: &str) -> Result<Vec<ProviderConfig>, rusqlite::Error> {
         let connection = self.connection()?;
-        let mut statement = connection.prepare("SELECT id, account_id, provider_type, display_name, secret_ref, enabled, last_error FROM providers WHERE account_id = ?1 ORDER BY created_at DESC")?;
+        let mut statement = connection.prepare("SELECT id, account_id, provider_type, display_name, secret_ref, enabled, last_error, resend_interval_days FROM providers WHERE account_id = ?1 ORDER BY created_at DESC")?;
         statement
             .query_map([account_id], |row| {
                 Ok(ProviderConfig {
@@ -89,13 +94,14 @@ impl Database {
                     secret_ref: row.get(4)?,
                     enabled: row.get::<_, i64>(5)? != 0,
                     last_error: row.get(6)?,
+                    resend_interval_days: row.get(7)?,
                 })
             })?
             .collect()
     }
 
     pub fn find_provider(&self, id: &str) -> Result<Option<ProviderConfig>, rusqlite::Error> {
-        self.connection()?.query_row("SELECT id, account_id, provider_type, display_name, secret_ref, enabled, last_error FROM providers WHERE id = ?1", [id], |row| Ok(ProviderConfig { id: row.get(0)?, account_id: row.get(1)?, provider_type: row.get(2)?, display_name: row.get(3)?, secret_ref: row.get(4)?, enabled: row.get::<_, i64>(5)? != 0, last_error: row.get(6)? })).optional()
+        self.connection()?.query_row("SELECT id, account_id, provider_type, display_name, secret_ref, enabled, last_error, resend_interval_days FROM providers WHERE id = ?1", [id], |row| Ok(ProviderConfig { id: row.get(0)?, account_id: row.get(1)?, provider_type: row.get(2)?, display_name: row.get(3)?, secret_ref: row.get(4)?, enabled: row.get::<_, i64>(5)? != 0, last_error: row.get(6)?, resend_interval_days: row.get(7)? })).optional()
     }
 
     pub fn add_provider(
@@ -202,6 +208,19 @@ impl Database {
         self.connection()?.execute(
             "UPDATE providers SET last_error = ?2, updated_at = ?3 WHERE id = ?1",
             params![id, error, now()],
+        )?;
+        Ok(())
+    }
+
+    pub fn update_resend_interval(
+        &self,
+        id: &str,
+        account_id: &str,
+        resend_interval_days: i64,
+    ) -> Result<(), rusqlite::Error> {
+        self.connection()?.execute(
+            "UPDATE providers SET resend_interval_days = ?3, updated_at = ?4 WHERE id = ?1 AND account_id = ?2 AND provider_type = 'resend'",
+            params![id, account_id, resend_interval_days, now()],
         )?;
         Ok(())
     }

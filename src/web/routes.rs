@@ -11,7 +11,7 @@ use axum::{
 use crate::{
     models::{
         Account, NewAccount, NewProvider, ProviderConfig, UpdateAccount, UpdateProvider,
-        UsageSnapshot,
+        UpdateResendInterval, UsageSnapshot,
     },
     secrets::{begin_authentication, check_application_default_credentials},
     web::AppState,
@@ -36,6 +36,10 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/providers/new", get(new_provider_form))
         .route("/providers/{id}/edit", get(edit_provider))
         .route("/providers/{id}", post(update_provider))
+        .route(
+            "/providers/{id}/resend-interval",
+            post(update_resend_interval),
+        )
         .route("/providers/{id}/delete", post(delete_provider))
         .route("/providers/{id}/delete/confirm", get(delete_confirmation))
 }
@@ -197,6 +201,23 @@ async fn update_provider(
     state
         .database
         .update_provider(&provider.id, &provider.account_id, input)?;
+    render_dashboard(&state)
+}
+
+async fn update_resend_interval(
+    Path(id): Path<String>,
+    State(state): State<Arc<AppState>>,
+    Form(input): Form<UpdateResendInterval>,
+) -> Result<Html<String>, AppError> {
+    let provider = provider_for_active_account(&state, &id)?;
+    if provider.provider_type != "resend" || !valid_resend_interval(input.resend_interval_days) {
+        return Err(AppError::BadRequest);
+    }
+    state.database.update_resend_interval(
+        &provider.id,
+        &provider.account_id,
+        input.resend_interval_days,
+    )?;
     render_dashboard(&state)
 }
 
@@ -409,6 +430,10 @@ fn valid_secret_name(value: &str) -> bool {
         && value.chars().all(|character| {
             character.is_ascii_alphanumeric() || character == '_' || character == '-'
         })
+}
+
+fn valid_resend_interval(value: i64) -> bool {
+    matches!(value, 3 | 7 | 15 | 30)
 }
 
 #[derive(Template)]

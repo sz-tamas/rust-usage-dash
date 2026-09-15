@@ -9,6 +9,7 @@ pub struct ProviderConfig {
     pub secret_ref: String,
     pub enabled: bool,
     pub last_error: Option<String>,
+    pub resend_interval_days: i64,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -41,6 +42,11 @@ pub struct NewProvider {
 pub struct UpdateProvider {
     pub display_name: String,
     pub secret_ref: String,
+}
+
+#[derive(Deserialize)]
+pub struct UpdateResendInterval {
+    pub resend_interval_days: i64,
 }
 
 #[derive(Debug, Clone)]

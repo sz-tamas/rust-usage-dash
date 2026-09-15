@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use chrono::{Duration, Utc};
 use serde::Deserialize;
 
 use crate::models::{Metric, ProviderConfig, UsageSnapshot};
@@ -43,8 +44,16 @@ impl Provider for ResendProvider {
             secret.starts_with("Bearer "),
             secret.chars().any(char::is_whitespace),
         );
+        let end_date = Utc::now().date_naive();
+        let start_date = end_date - Duration::days(config.resend_interval_days);
+        let metrics = "sent,delivered,bounced,complained,failed";
         let response = reqwest::Client::new()
             .get("https://api.resend.com/emails/metrics")
+            .query(&[
+                ("start_date", start_date.to_string()),
+                ("end_date", end_date.to_string()),
+                ("metrics", metrics.to_owned()),
+            ])
             .bearer_auth(secret)
             .header("User-Agent", "rust-usage-dash/0.1")
             .send()
@@ -97,32 +106,38 @@ impl Provider for ResendProvider {
         let mut metrics = Vec::new();
         add_metric(
             &mut metrics,
-            "emails_sent_7d",
-            "Emails sent (last 7 days)",
+            &format!("emails_sent_{}d", config.resend_interval_days),
+            &format!("Emails sent (last {} days)", config.resend_interval_days),
             response.totals.sent,
         );
         add_metric(
             &mut metrics,
-            "emails_delivered_7d",
-            "Emails delivered (last 7 days)",
+            &format!("emails_delivered_{}d", config.resend_interval_days),
+            &format!(
+                "Emails delivered (last {} days)",
+                config.resend_interval_days
+            ),
             response.totals.delivered,
         );
         add_metric(
             &mut metrics,
-            "emails_bounced_7d",
-            "Emails bounced (last 7 days)",
+            &format!("emails_bounced_{}d", config.resend_interval_days),
+            &format!("Emails bounced (last {} days)", config.resend_interval_days),
             response.totals.bounced,
         );
         add_metric(
             &mut metrics,
-            "emails_complained_7d",
-            "Spam complaints (last 7 days)",
+            &format!("emails_complained_{}d", config.resend_interval_days),
+            &format!(
+                "Spam complaints (last {} days)",
+                config.resend_interval_days
+            ),
             response.totals.complained,
         );
         add_metric(
             &mut metrics,
-            "emails_failed_7d",
-            "Emails failed (last 7 days)",
+            &format!("emails_failed_{}d", config.resend_interval_days),
+            &format!("Emails failed (last {} days)", config.resend_interval_days),
             response.totals.failed,
         );
 
