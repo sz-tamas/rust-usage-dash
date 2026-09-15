@@ -1,0 +1,14 @@
+@import "tailwindcss";
+
+@source "../../templates";
+
+@theme {
+  --color-ink: #172033;
+  --color-canvas: #f6f7fb;
+  --color-brand: #5b52e8;
+  --color-brand-dark: #4438c7;
+}
+
+@layer base {
+  body { @apply min-h-screen bg-canvas font-sans text-ink antialiased; }
+}
