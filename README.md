@@ -62,24 +62,48 @@ Enter the plan's included monthly credit allowance in USD when creating or editi
 
 Enter the plan label plus monthly and daily email quotas. The dashboard collects sent and received email totals and displays quota usage, remaining allowance, and the percentage used.
 
-Neon and Upstash may be configured in the UI but do not yet have collectors.
+### Planned integrations
+
+- Cloudflare
+- Neon Cloud
+- Upstash
+- Google Cloud (including expanded Secret Manager support)
+- AWS
+- Postmark
+- Claude
+- Gemini
+- GitHub
+- GitLab
+- ...
 
 ## Security boundary
 
-- The server binds only to `127.0.0.1`; `USAGE_DASH_PORT` in `mise.toml` selects its port (currently: `5050`).
-- Provider API keys are not read from `.env`, configuration, or process environment variables. SQLite contains secret *references* and sanitized metrics only, never provider credential values.
-- The browser receives provider metadata, refresh status, and normalized metrics only. It never receives a provider API key or a Secret Manager payload.
-- Application Default Credentials (ADC) are intentionally stored locally by `gcloud` (normally in `~/.config/gcloud/application_default_credentials.json`). This is the Google authentication needed to read Secret Manager; it is not a provider API key.
-- Every provider refresh obtains a fresh ADC token as needed, reads the configured Secret Manager version, and then makes the provider request. The dashboard does not cache provider API keys: a Secret Manager or provider-access failure fails that refresh rather than falling back to an older credential.
-- The resolved provider key is held as Rust `secrecy::SecretString` and exposed only at the provider's authorization call. `SecretString` zeroizes its backing value when dropped; decoded intermediate buffers use `zeroize` as well. No key is written to a file, database, browser response, or log. Network/TLS libraries necessarily hold transient request-header buffers while sending the request.
-- Logs contain only safe diagnostic metadata, such as an HTTP status or key-shape flags. They never contain a provider key, authorization header, Secret Manager payload, access token, or provider response body.
+- Localhost only: the server binds to `127.0.0.1`.
+- Provider keys never enter SQLite, browser responses, configuration, environment variables, or logs; only Secret Manager identifiers and sanitized metrics are persisted.
+- Resolved keys use `secrecy::SecretString` and `zeroize`, and are exposed only for the transient provider authorization request. Google ADC is managed locally by `gcloud` and is separate from provider credentials.
+
+### Security comparison
+
+| Risk / property | Rust Usage Dashboard | Other local credential-storing dashboard |
+| --- | --- | --- |
+| Persistent provider secrets on disk | **No** | **Yes**, commonly encrypted in an OS keyring |
+| Provider secret present when app is idle | **No** | **Yes**, persisted locally |
+| Provider secret present while fetching | **Yes, transiently** | **Yes, after decrypting** |
+| Memory cleanup after use | **Explicit zeroization** with `secrecy` / `zeroize` | Depends on implementation |
+| Local-only execution | **Yes** | Often yes |
+| Third-party server sees credentials | **No** | Typically no |
+| Secret source | Google Secret Manager | OS keyring |
+| App needs raw provider key stored locally | **No** | **Yes** |
+| Theft of app data directory | Stats/meta only; no provider credentials | Credential ciphertext and/or keyring references may exist |
+| Theft of OS keyring | Not enough to obtain provider keys that exist only in Google Secret Manager | May expose stored provider credentials |
+| Runtime process compromise | Can capture a key during a fetch | Can capture a key whenever decrypted or used |
+| Memory inspection | Same fundamental limitation during active use | Same fundamental limitation during active use |
+| Post-fetch memory residue | **Mitigated by zeroization** | Depends on handling |
+| Credential rotation | Managed centrally in Google Secret Manager | Must update the locally stored secret |
+| Multi-device credential consistency | Naturally centralized | Separate local keyring state per machine |
 
 ### Authorization and credential disclaimer
 
 This is a local tool run by you, for accounts and secrets you are authorized to use. No dashboard operator, maintainer, hosted service, or browser user is sent your credential value, and the application does not display, persist, or log it. The credential is retrieved locally from the Secret Manager reference you choose and is sent only as a transient HTTPS authorization header to the provider you configured. You are responsible for granting Google IAM access only to the intended secrets and for using provider credentials with the permissions you intend.
-
-### Local threat model
-
-The dashboard protects credentials from its SQLite database, logs, browser responses, and network listeners outside the local machine. It does not protect against a person or malicious process that already controls the machine or the Google account/ADC identity used to run it. Use a dedicated local account where appropriate, keep the machine secure, and grant that identity access only to the specific Secret Manager secrets required.
 
 Before using production credentials, run `mise run check` and `mise run test`, then review IAM grants and provider-specific response handling.
