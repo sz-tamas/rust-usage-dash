@@ -11,7 +11,7 @@ use axum::{
 use crate::{
     models::{
         Account, NewAccount, NewProvider, ProviderConfig, UpdateAccount, UpdateProvider,
-        UpdateResendInterval, UsageSnapshot,
+        UsageSnapshot,
     },
     secrets::{begin_authentication, check_application_default_credentials},
     web::AppState,
@@ -37,10 +37,6 @@ pub fn router() -> Router<Arc<AppState>> {
         .route("/providers/new", get(new_provider_form))
         .route("/providers/{id}/edit", get(edit_provider))
         .route("/providers/{id}", post(update_provider))
-        .route(
-            "/providers/{id}/resend-interval",
-            post(update_resend_interval),
-        )
         .route("/providers/{id}/delete", post(delete_provider))
         .route("/providers/{id}/delete/confirm", get(delete_confirmation))
 }
@@ -165,6 +161,8 @@ async fn create_provider(
         )
         || input.display_name.trim().is_empty()
         || input.secret_ref.trim().is_empty()
+        || input.plan.trim().is_empty()
+        || input.monthly_quota <= 0
     {
         return Err(AppError::BadRequest);
     }
@@ -193,7 +191,11 @@ async fn update_provider(
     Form(input): Form<UpdateProvider>,
 ) -> Result<Html<String>, AppError> {
     let provider = provider_for_active_account(&state, &id)?;
-    if input.display_name.trim().is_empty() || input.secret_ref.trim().is_empty() {
+    if input.display_name.trim().is_empty()
+        || input.secret_ref.trim().is_empty()
+        || input.plan.trim().is_empty()
+        || input.monthly_quota <= 0
+    {
         return Err(AppError::BadRequest);
     }
     if !valid_secret_name(input.secret_ref.trim()) {
@@ -202,23 +204,6 @@ async fn update_provider(
     state
         .database
         .update_provider(&provider.id, &provider.account_id, input)?;
-    render_dashboard(&state)
-}
-
-async fn update_resend_interval(
-    Path(id): Path<String>,
-    State(state): State<Arc<AppState>>,
-    Form(input): Form<UpdateResendInterval>,
-) -> Result<Html<String>, AppError> {
-    let provider = provider_for_active_account(&state, &id)?;
-    if provider.provider_type != "resend" || !valid_resend_interval(input.resend_interval_days) {
-        return Err(AppError::BadRequest);
-    }
-    state.database.update_resend_interval(
-        &provider.id,
-        &provider.account_id,
-        input.resend_interval_days,
-    )?;
     render_dashboard(&state)
 }
 
@@ -344,15 +329,59 @@ fn render_cards(state: &AppState, account_id: &str) -> Result<String, AppError> 
         .list_providers(account_id)?
         .into_iter()
         .map(|provider| {
+            let snapshot = state.database.latest_snapshot(&provider.id)?;
             ProviderCardTemplate {
-                snapshot: state.database.latest_snapshot(&provider.id)?,
+                resend_quota: resend_quota_summary(&provider, snapshot.as_ref()),
                 provider,
+                snapshot,
             }
             .render()
             .map_err(AppError::from)
         })
         .collect::<Result<Vec<_>, AppError>>()
         .map(|cards| cards.join("\n"))
+}
+
+fn resend_quota_summary(
+    provider: &ProviderConfig,
+    snapshot: Option<&UsageSnapshot>,
+) -> Option<ResendQuotaSummary> {
+    if provider.provider_type != "resend" || provider.monthly_quota <= 0 {
+        return None;
+    }
+    let snapshot = snapshot?;
+    let sent = snapshot
+        .metrics
+        .iter()
+        .find(|metric| metric.id == "emails_sent_current_month")?
+        .used;
+    let received = snapshot
+        .metrics
+        .iter()
+        .find(|metric| metric.id == "emails_received_current_month")?
+        .used;
+    let used = sent + received;
+    let limit = provider.monthly_quota as f64;
+    Some(ResendQuotaSummary {
+        plan: provider.plan.clone(),
+        used: format_email_count(used),
+        limit: format_email_count(limit),
+        remaining: format_email_count((provider.monthly_quota.saturating_sub(used as i64)) as f64),
+        percent_used: format!("{:.1}", used / limit * 100.0),
+    })
+}
+
+fn format_email_count(value: f64) -> String {
+    let value = value.max(0.0).round() as i64;
+    let digits = value.to_string();
+    let mut formatted = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index) % 3 == 0 {
+            formatted.push(',');
+        }
+        formatted.push(digit);
+    }
+    formatted
 }
 
 fn provider_for_active_account(state: &AppState, id: &str) -> Result<ProviderConfig, AppError> {
@@ -441,10 +470,6 @@ fn valid_secret_name(value: &str) -> bool {
         })
 }
 
-fn valid_resend_interval(value: i64) -> bool {
-    matches!(value, 3 | 7 | 15 | 30)
-}
-
 #[derive(Template)]
 #[template(path = "pages/index.html")]
 struct DashboardTemplate {
@@ -465,6 +490,15 @@ struct NewProviderDialogTemplate;
 struct ProviderCardTemplate {
     provider: ProviderConfig,
     snapshot: Option<UsageSnapshot>,
+    resend_quota: Option<ResendQuotaSummary>,
+}
+
+struct ResendQuotaSummary {
+    plan: String,
+    used: String,
+    limit: String,
+    remaining: String,
+    percent_used: String,
 }
 #[derive(Template)]
 #[template(path = "partials/provider_list.html")]
