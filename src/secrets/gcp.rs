@@ -5,6 +5,7 @@ use base64::{
 };
 use serde::Deserialize;
 use tokio::process::Command;
+use zeroize::{Zeroize, Zeroizing};
 
 use super::{SecretError, SecretResolver};
 
@@ -46,7 +47,7 @@ pub async fn check_application_default_credentials() -> Result<(), SecretError> 
     application_default_access_token().await.map(|_| ())
 }
 
-async fn application_default_access_token() -> Result<String, SecretError> {
+async fn application_default_access_token() -> Result<Zeroizing<String>, SecretError> {
     let credentials = Command::new("gcloud")
         .args([
             "auth",
@@ -60,18 +61,25 @@ async fn application_default_access_token() -> Result<String, SecretError> {
     if !credentials.status.success() || credentials.stdout.is_empty() {
         return Err(SecretError::AuthenticationFailed);
     }
-    let token =
-        String::from_utf8(credentials.stdout).map_err(|_| SecretError::AuthenticationFailed)?;
-    let token = token.trim();
+    let mut token = match String::from_utf8(credentials.stdout) {
+        Ok(token) => token,
+        Err(error) => {
+            let mut invalid_bytes = error.into_bytes();
+            invalid_bytes.zeroize();
+            return Err(SecretError::AuthenticationFailed);
+        }
+    };
+    let without_newline = token.trim_end_matches(['\r', '\n']).len();
+    token.truncate(without_newline);
     if token.is_empty() {
         return Err(SecretError::AuthenticationFailed);
     }
-    Ok(token.to_owned())
+    Ok(Zeroizing::new(token))
 }
 
 #[async_trait]
 impl SecretResolver for GcpSecretManagerResolver {
-    async fn resolve(&self, reference: &str) -> Result<String, SecretError> {
+    async fn resolve(&self, reference: &str) -> Result<Zeroizing<String>, SecretError> {
         let parts: Vec<_> = reference.split('/').collect();
         if parts.len() != 6
             || parts[0] != "projects"
@@ -89,24 +97,36 @@ impl SecretResolver for GcpSecretManagerResolver {
             .get(format!(
                 "https://secretmanager.googleapis.com/v1/{reference}:access"
             ))
-            .bearer_auth(token)
+            .bearer_auth(token.as_str())
             .send()
             .await
             .map_err(|_| SecretError::AccessFailed)?;
         if !response.status().is_success() {
             return Err(SecretError::AccessFailed);
         }
-        let payload = response
+        let mut payload = response
             .json::<AccessSecretVersionResponse>()
             .await
             .map_err(|_| SecretError::InvalidPayload)?;
-        let bytes = URL_SAFE_NO_PAD
-            .decode(&payload.payload.data)
-            .or_else(|_| URL_SAFE.decode(&payload.payload.data))
-            .map_err(|_| SecretError::InvalidPayload)?;
-        // Do not log this value. It is dropped once the collector returns.
-        String::from_utf8(bytes)
-            .map(|value| value.trim_end_matches(['\r', '\n']).to_owned())
-            .map_err(|_| SecretError::InvalidPayload)
+        let encoded = Zeroizing::new(std::mem::take(&mut payload.payload.data));
+        let bytes = Zeroizing::new(
+            URL_SAFE_NO_PAD
+                .decode(encoded.as_bytes())
+                .or_else(|_| URL_SAFE.decode(encoded.as_bytes()))
+                .map_err(|_| SecretError::InvalidPayload)?,
+        );
+        let mut value = match String::from_utf8(bytes.to_vec()) {
+            Ok(value) => value,
+            Err(error) => {
+                let mut invalid_bytes = error.into_bytes();
+                invalid_bytes.zeroize();
+                return Err(SecretError::InvalidPayload);
+            }
+        };
+        let without_newline = value.trim_end_matches(['\r', '\n']).len();
+        value.truncate(without_newline);
+        // `encoded` and `bytes` are explicitly zeroized when they leave scope.
+        // The returned value is zeroized after the provider request completes.
+        Ok(Zeroizing::new(value))
     }
 }

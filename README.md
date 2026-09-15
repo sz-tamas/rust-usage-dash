@@ -40,8 +40,11 @@ The current collectors implement Apify monthly usage and Resend email-quota usag
 ## Security boundary
 
 - The server binds only to `127.0.0.1`; `USAGE_DASH_PORT` in `mise.toml` selects its port (currently: `3001`).
-- SQLite contains secret *references*, never secret values.
-- The GCP resolver obtains an ADC access token and calls the Secret Manager API directly. It never falls back to the separate `gcloud auth login` identity and does not log secret data.
-- Provider requests use the secret only in memory and return sanitized metrics.
+- Provider API keys are not read from `.env`, configuration, or process environment variables. SQLite contains secret *references* and sanitized metrics only, never provider credential values.
+- The browser receives provider metadata, refresh status, and normalized metrics only. It never receives a provider API key or a Secret Manager payload.
+- Application Default Credentials (ADC) are intentionally stored locally by `gcloud` (normally in `~/.config/gcloud/application_default_credentials.json`). This is the Google authentication needed to read Secret Manager; it is not a provider API key.
+- Every provider refresh obtains a fresh ADC token as needed, reads the configured Secret Manager version, and then makes the provider request. The dashboard does not cache provider API keys: a Secret Manager or provider-access failure fails that refresh rather than falling back to an older credential.
+- The resolved provider key exists only in process memory for the request. Application-owned decoded key buffers use explicit zeroization after the request path completes; no key is written to a file, database, browser response, or log. Network/TLS libraries necessarily hold transient request-header buffers while sending the request.
+- Logs contain only safe diagnostic metadata, such as an HTTP status or key-shape flags. They never contain a provider key, authorization header, Secret Manager payload, access token, or provider response body.
 
 Before using production credentials, run `mise run check` and review IAM grants and provider-specific response handling.

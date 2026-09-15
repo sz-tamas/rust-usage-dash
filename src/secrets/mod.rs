@@ -1,6 +1,7 @@
 mod gcp;
 
 use async_trait::async_trait;
+use zeroize::Zeroizing;
 
 pub use gcp::{
     GcpSecretManagerResolver, begin_authentication, check_application_default_credentials,
@@ -9,7 +10,7 @@ pub use gcp::{
 #[async_trait]
 pub trait SecretResolver: Send + Sync {
     /// Resolves a credential only for the duration of a collection request.
-    async fn resolve(&self, reference: &str) -> Result<String, SecretError>;
+    async fn resolve(&self, reference: &str) -> Result<Zeroizing<String>, SecretError>;
 }
 
 #[derive(Debug, thiserror::Error)]

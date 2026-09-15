@@ -858,6 +858,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tower-http",
+ "zeroize",
 ]
 
 [[package]]
