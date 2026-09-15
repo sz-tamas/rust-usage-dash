@@ -1,5 +1,6 @@
 [tools]
 rust = "stable"
+"cargo:bacon" = "latest"
 
 [env]
 RUST_LOG = "info"
@@ -33,3 +34,7 @@ run = "cargo fmt --check && cargo check"
 [tasks.start]
 description = "Build CSS and start the localhost dashboard"
 run = "mise run css:build && cargo run"
+
+[tasks.dev]
+description = "Build CSS, then watch Rust changes and restart the dashboard with Bacon"
+run = "mise run css:build && bacon run"

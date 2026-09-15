@@ -2,7 +2,9 @@ mod gcp;
 
 use async_trait::async_trait;
 
-pub use gcp::GcpSecretManagerResolver;
+pub use gcp::{
+    GcpSecretManagerResolver, begin_authentication, check_application_default_credentials,
+};
 
 #[async_trait]
 pub trait SecretResolver: Send + Sync {

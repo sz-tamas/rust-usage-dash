@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 #[derive(Debug, Clone)]
 pub struct ProviderConfig {
     pub id: String,
+    pub account_id: String,
     pub provider_type: String,
     pub display_name: String,
     pub secret_ref: String,
@@ -33,4 +34,23 @@ pub struct NewProvider {
     pub provider_type: String,
     pub display_name: String,
     pub secret_ref: String,
+}
+
+#[derive(Debug, Clone)]
+pub struct Account {
+    pub id: String,
+    pub project_id: String,
+    pub project_name: Option<String>,
+    pub auth_status: String,
+    pub auth_error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Onboarding {
+    pub current_step: i64,
+}
+
+#[derive(Deserialize)]
+pub struct NewAccount {
+    pub project_id: String,
 }

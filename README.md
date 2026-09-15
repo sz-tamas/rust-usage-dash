@@ -21,6 +21,12 @@ The database defaults to `data/usage-dashboard.sqlite3`; override that non-secre
 
 `mise run install` downloads the Tailwind standalone binary to `.tools/`. No `package.json` or `node_modules` is used. `mise run css:build` recompiles `static/css/output.css` from `static/css/input.css`.
 
+For Rust development with automatic rebuilds and server restarts, run:
+
+```bash
+mise run dev
+```
+
 ## Adding a provider
 
 Enter a reference in this exact form:
